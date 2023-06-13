@@ -2,7 +2,6 @@ package apbroute
 
 import (
 	"context"
-	"time"
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
@@ -299,11 +298,11 @@ var _ = Describe("OVN External Gateway policy", func() {
 			Eventually(func() []string { return listRoutePolicyInCache() }, 5).Should(HaveLen(2))
 			Eventually(func() []string { return listNamespaceInfo() }, 5).Should(HaveLen(1))
 			deletePolicy(staticPolicy.Name, fakeRouteClient)
-			Eventually(func() []string { return listRoutePolicyInCache() }, time.Hour, 1).Should(HaveLen(1))
+			Eventually(func() []string { return listRoutePolicyInCache() }, 5).Should(HaveLen(1))
 
 			Eventually(func() *namespaceInfo {
 				return getNamespaceInfo(namespaceTest.Name)
-			}, time.Hour, time.Hour).Should(BeComparableTo(
+			}, 5).Should(BeComparableTo(
 				&namespaceInfo{
 					Policies:       sets.New(dynamicPolicy.Name),
 					StaticGateways: gatewayInfoList{},

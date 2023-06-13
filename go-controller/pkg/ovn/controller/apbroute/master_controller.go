@@ -257,7 +257,7 @@ func (c *ExternalGatewayMasterController) processNextPolicyWorkItem(wg *sync.Wai
 	err = c.updateStatusAPBExternalRoute(item, err)
 	if err != nil {
 		if c.routeQueue.NumRequeues(item) < maxRetries {
-			klog.V(2).InfoS("Error found while processing policy: %w", err)
+			klog.Infof("Error found while processing policy: %w", err)
 			c.routeQueue.AddRateLimited(item)
 			return true
 		}

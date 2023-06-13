@@ -410,12 +410,11 @@ func (m *externalPolicyManager) calculateAnnotatedPodGatewayIPsForNamespace(targ
 // In a nutshell, if a gateway IP is only found in the policy being deleted, then the IP is removed from the network resource. But if the IP is
 // found in at least a legacy annotation or another policy impacting the namespace, then the IP is not removed from the cache or the network resource (north bound or conntrack)
 func (m *externalPolicyManager) deletePolicyInNamespace(namespaceName, policyName string, routePolicy *routePolicy, cacheInfo *namespaceInfo) error {
-	coexistingPolicies := cacheInfo.Policies.Clone().Delete(policyName)
 
 	// don't care if the route is flagged for deletion, delete any gw IPs related to the policy
 	policy, found, _ := m.getRoutePolicyFromCache(policyName)
 	if !found {
-		return fmt.Errorf("policy %s not found", policyName)
+		return nil
 	}
 	pp, err := m.processExternalRoutePolicy(policy)
 	if err != nil {
@@ -427,6 +426,7 @@ func (m *externalPolicyManager) deletePolicyInNamespace(namespaceName, policyNam
 	if err != nil {
 		return err
 	}
+	coexistingPolicies := cacheInfo.Policies.Clone().Delete(policyName)
 	coexistingIPs, err := m.retrieveStaticGatewayIPsForPolicies(coexistingPolicies)
 	if err != nil {
 		return err

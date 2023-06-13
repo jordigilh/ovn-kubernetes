@@ -275,7 +275,7 @@ var _ = Describe("OVN External Gateway policy", func() {
 					Policies:       sets.New(overlappingPolicy.Name, dynamicPolicy.Name),
 					StaticGateways: gatewayInfoList{},
 					DynamicGateways: map[types.NamespacedName]*gatewayInfo{
-						{Namespace: "default", Name: pod2.Name}: newGatewayInfo(sets.New(pod2.Status.PodIPs[0].IP), false),
+						{Namespace: pod2.Namespace, Name: pod2.Name}: newGatewayInfo(sets.New(pod2.Status.PodIPs[0].IP), false),
 					},
 				}))
 		})

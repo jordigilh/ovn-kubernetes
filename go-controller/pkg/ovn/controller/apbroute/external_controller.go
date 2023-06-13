@@ -309,6 +309,7 @@ func (m *externalPolicyManager) getAndMarkRoutePolicyForDeletionInCache(policyNa
 
 func (m *externalPolicyManager) getNamespaceInfoFromCache(namespaceName string) (*namespaceInfo, bool) {
 	m.namespaceInfoSyncCache.LockKey(namespaceName)
+	klog.Infof("Getting lock %s", namespaceName)
 	nsInfo, ok := m.namespaceInfoSyncCache.Load(namespaceName)
 	if !ok {
 		m.namespaceInfoSyncCache.UnlockKey(namespaceName)
@@ -344,6 +345,7 @@ func (m *externalPolicyManager) deleteNamespaceInfoInCache(namespaceName string)
 }
 
 func (m *externalPolicyManager) unlockNamespaceInfoCache(namespaceName string) {
+	klog.Infof("Unlocking %s", namespaceName)
 	m.namespaceInfoSyncCache.UnlockKey(namespaceName)
 }
 
@@ -368,7 +370,8 @@ func (m *externalPolicyManager) getAllRoutePolicies() ([]*adminpolicybasedroutea
 		for _, policyName := range keys {
 			rp, found, markedForDeletion := m.getRoutePolicyFromCache(policyName)
 			if !found {
-				return nil, fmt.Errorf("failed to find external route policy %s in cache", policyName)
+				klog.Infof("failed to find external route policy %s in cache", policyName)
+				continue
 			}
 			if markedForDeletion {
 				klog.Infof("Skipping route policy %s as it has been marked for deletion", policyName)

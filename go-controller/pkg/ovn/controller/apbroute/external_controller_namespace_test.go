@@ -334,7 +334,7 @@ var _ = Describe("OVN External Gateway namespace", func() {
 			createNamespace(namespaceTest)
 			By("delete the remaining pod in the namespace to proceed on deleting the namespace itself")
 			deletePod(targetPod, fakeClient)
-			Eventually(func() []string { return listNamespaceInfo() }, time.Hour).Should(HaveLen(1))
+			Eventually(func() []string { return listNamespaceInfo() }, 5).Should(HaveLen(1))
 			// The new namespace should not be marked for deletion and should contain the same dynamic gateways
 			Eventually(func() bool {
 				nsInfo := getNamespaceInfo(namespaceTest.Name)
@@ -342,7 +342,7 @@ var _ = Describe("OVN External Gateway namespace", func() {
 					return nsInfo.markForDeletion
 				}
 				return true
-			}, time.Hour).Should(BeFalse())
+			}, 5).Should(BeFalse())
 			Eventually(func() int {
 				nsInfo := getNamespaceInfo(namespaceTest.Name)
 				return len(nsInfo.DynamicGateways)

@@ -48,17 +48,7 @@ func (m *externalPolicyManager) syncPod(pod *v1.Pod, podLister corev1listers.Pod
 		// ADD or UPDATE case
 		klog.Infof("Adding or Updating pod gateway %s/%s", pod.Namespace, pod.Name)
 	}
-	for policyName := range policies {
-		p, found, markedForDeletion := m.getRoutePolicyFromCache(policyName)
-		if !found {
-			return fmt.Errorf("failed to find external route policy %s in cache", policyName)
-		}
-		if markedForDeletion {
-			klog.Infof("Skipping route policy %s as it has been marked for deletion", policyName)
-			continue
-		}
-		routeQueue.Add(p)
-	}
+	m.notifyRouteController(policies, routeQueue)
 	return nil
 }
 

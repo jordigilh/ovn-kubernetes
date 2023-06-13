@@ -8,6 +8,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/util/sets"
 	corev1listers "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog/v2"
@@ -62,10 +63,16 @@ func (m *externalPolicyManager) syncNamespace(namespace *v1.Namespace, namespace
 		// policies might differ, need to reconcile them
 	}
 	// notify of changes to the policy controller
-	for policyName := range matches {
+	m.notifyRouteController(matches, routeQueue)
+	return nil
+}
+
+func (m *externalPolicyManager) notifyRouteController(policies sets.Set[string], routeQueue workqueue.RateLimitingInterface) {
+	for policyName := range policies {
 		policy, found, markedForDeletion := m.getRoutePolicyFromCache(policyName)
 		if !found {
-			return fmt.Errorf("unable to find matching policy %s in cache", policyName)
+			klog.Infof("unable to find matching policy %s in cache", policyName)
+			continue
 		}
 		if markedForDeletion {
 			klog.Infof("Skipping route policy %s as it has been marked for deletion", policyName)
@@ -74,7 +81,6 @@ func (m *externalPolicyManager) syncNamespace(namespace *v1.Namespace, namespace
 		klog.V(2).InfoS("Queueing policy %s", policyName)
 		routeQueue.Add(policy)
 	}
-	return nil
 }
 
 // processDeleteNamespace processes a delete namespace event by ensuring that no pod is still running in that namespace before deleting the namespace info cache. It also
@@ -100,7 +106,8 @@ func (m *externalPolicyManager) processDeleteNamespace(namespaceName string) ([]
 	for policyName := range nsInfo.Policies {
 		policy, found, markedForDeletion := m.getRoutePolicyFromCache(policyName)
 		if !found {
-			return nil, fmt.Errorf("failed to find external route policy %s in cache", policyName)
+			klog.Infof("failed to find external route policy %s in cache", policyName)
+			continue
 		}
 		if markedForDeletion {
 			klog.Infof("Skipping route policy %s as it has been marked for deletion", policyName)
