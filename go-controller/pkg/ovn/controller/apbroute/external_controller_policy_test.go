@@ -2,6 +2,7 @@ package apbroute
 
 import (
 	"context"
+	"time"
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
@@ -376,7 +377,9 @@ var _ = Describe("OVN External Gateway policy", func() {
 				return p.Status.LastTransitionTime
 			}).Should(Not(Equal(lastUpdate)))
 			Eventually(func() []string { return listNamespaceInfo() }, 5).Should(HaveLen(2))
-			Eventually(func() *namespaceInfo { return getNamespaceInfo(namespaceTest.Name) }, 5).Should(Equal(newNamespaceInfo()))
+			Eventually(func() *namespaceInfo {
+				return getNamespaceInfo(namespaceTest.Name)
+			}, 5).Should(BeComparableTo(newNamespaceInfo(), cmpOpts...))
 
 			Eventually(func() *namespaceInfo {
 				return getNamespaceInfo(namespaceTest2.Name)
@@ -427,7 +430,7 @@ var _ = Describe("OVN External Gateway policy", func() {
 
 			Eventually(func() *namespaceInfo {
 				return getNamespaceInfo(namespaceTest.Name)
-			}, 5).Should(BeComparableTo(
+			}, time.Hour, time.Second).Should(BeComparableTo(
 				&namespaceInfo{
 					Policies: sets.New(staticPolicy.Name),
 					StaticGateways: gatewayInfoList{

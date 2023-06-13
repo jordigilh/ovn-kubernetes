@@ -423,7 +423,7 @@ func (c *ExternalGatewayMasterController) updateStatusAPBExternalRoute(externalR
 	}
 	updateStatus(routePolicy, strings.Join(sets.List(gwIPs), ","), processedError)
 	_, err = c.apbRoutePolicyClient.K8sV1().AdminPolicyBasedExternalRoutes().UpdateStatus(context.TODO(), routePolicy, metav1.UpdateOptions{})
-	if !apierrors.IsNotFound(err) {
+	if err != nil && !apierrors.IsNotFound(err) {
 		return err
 	}
 	return processedError

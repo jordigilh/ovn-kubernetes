@@ -2,6 +2,7 @@ package apbroute
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 
@@ -150,6 +151,7 @@ type namespaceInfo struct {
 	StaticGateways  gatewayInfoList
 	DynamicGateways map[ktypes.NamespacedName]*gatewayInfo
 	markForDeletion bool
+	resourceVersion uint64
 }
 
 func newNamespaceInfo() *namespaceInfo {
@@ -308,14 +310,40 @@ func (m *externalPolicyManager) getAndMarkRoutePolicyForDeletionInCache(policyNa
 }
 
 func (m *externalPolicyManager) getNamespaceInfoFromCache(namespaceName string) (*namespaceInfo, bool) {
-	m.namespaceInfoSyncCache.LockKey(namespaceName)
-	// klog.Infof("Getting lock %s", namespaceName)
-	nsInfo, ok := m.namespaceInfoSyncCache.Load(namespaceName)
-	if !ok {
-		m.namespaceInfoSyncCache.UnlockKey(namespaceName)
-		return nil, false
+	var (
+		copy  *namespaceInfo
+		found bool
+	)
+	m.namespaceInfoSyncCache.DoWithLock(namespaceName, func(_ string) error {
+		// klog.Infof("Getting lock %s", namespaceName)
+		nsInfo, ok := m.namespaceInfoSyncCache.Load(namespaceName)
+		if ok {
+			copy = m.deepCopyNamespaceInfo(nsInfo)
+			found = true
+		}
+		return nil
+	})
+	return copy, found
+}
+
+func (m *externalPolicyManager) deepCopyNamespaceInfo(source *namespaceInfo) *namespaceInfo {
+	destination := newNamespaceInfo()
+	destination.Policies = sets.New(source.Policies.UnsortedList()...)
+	destination.StaticGateways = gatewayInfoList{}
+	destination.markForDeletion = source.markForDeletion
+	for _, gwInfo := range source.StaticGateways {
+		destination.StaticGateways, _, _ = destination.StaticGateways.Insert(&gatewayInfo{
+			Gateways: &syncSet{
+				mux:   &sync.Mutex{},
+				items: gwInfo.Gateways.items.Clone()},
+			BFDEnabled: gwInfo.BFDEnabled})
 	}
-	return nsInfo, true
+	destination.DynamicGateways = make(map[ktypes.NamespacedName]*gatewayInfo)
+	for key, value := range source.DynamicGateways {
+		destination.DynamicGateways[key] = value
+	}
+	destination.resourceVersion = source.resourceVersion
+	return destination
 }
 
 func (m *externalPolicyManager) getAllNamespacesNamesInCache() []string {
@@ -323,36 +351,75 @@ func (m *externalPolicyManager) getAllNamespacesNamesInCache() []string {
 }
 
 func (m *externalPolicyManager) getAndMarkForDeleteNamespaceInfoFromCache(namespaceName string) (*namespaceInfo, bool) {
-	nsInfo, ok := m.getNamespaceInfoFromCache(namespaceName)
-	if !ok {
-		return nil, false
-	}
-	nsInfo.markForDeletion = true
-	return nsInfo, ok
+	var (
+		copy  *namespaceInfo
+		found bool
+	)
+	m.namespaceInfoSyncCache.DoWithLock(namespaceName, func(_ string) error {
+		// klog.Infof("Getting lock %s", namespaceName)
+		nsInfo, ok := m.namespaceInfoSyncCache.Load(namespaceName)
+		if ok {
+			nsInfo.markForDeletion = true
+			nsInfo.resourceVersion++
+			copy = m.deepCopyNamespaceInfo(nsInfo)
+			found = true
+		}
+		return nil
+	})
+	return copy, found
 }
 
-func (m *externalPolicyManager) deleteNamespaceInfoInCache(namespaceName string) {
-	nsInfo, ok := m.namespaceInfoSyncCache.Load(namespaceName)
-	if !ok {
-		klog.Warningf("Failed to retrieve namespace %s for deletion", namespaceName)
-		return
-	}
-	if !nsInfo.markForDeletion {
-		klog.Warningf("Attempting to delete namespace %s when it has not been marked for deletion", namespaceName)
-		return
-	}
-	m.namespaceInfoSyncCache.Delete(namespaceName)
+func (m *externalPolicyManager) deleteNamespaceInfoInCache(namespaceName string, nsInfo *namespaceInfo) error {
+	return m.namespaceInfoSyncCache.DoWithLock(namespaceName, func(_ string) error {
+		cachedInfo, ok := m.namespaceInfoSyncCache.Load(namespaceName)
+		if !ok {
+			klog.Warningf("Failed to retrieve namespace %s for deletion", namespaceName)
+			return nil
+		}
+		if !nsInfo.markForDeletion {
+			klog.Warningf("Attempting to delete namespace %s when it has not been marked for deletion", namespaceName)
+			return nil
+		}
+		if nsInfo.resourceVersion != cachedInfo.resourceVersion {
+			return fmt.Errorf("resourceVersion differ, unable to delete namespace info for %s", namespaceName)
+		}
+		m.namespaceInfoSyncCache.Delete(namespaceName)
+		return nil
+	})
+
 }
 
-func (m *externalPolicyManager) unlockNamespaceInfoCache(namespaceName string) {
-	// klog.Infof("Unlocking %s", namespaceName)
-	m.namespaceInfoSyncCache.UnlockKey(namespaceName)
+func (m *externalPolicyManager) unlockNamespaceInfoCache(namespaceName string, nsInfo *namespaceInfo) error {
+	return m.namespaceInfoSyncCache.DoWithLock(namespaceName, func(_ string) error {
+		klog.Infof("Unlocking namespace %s", namespaceName)
+		cachedInfo, ok := m.namespaceInfoSyncCache.Load(namespaceName)
+		if !ok {
+			klog.Warningf("Failed to retrieve namespace %s for deletion", namespaceName)
+			return nil
+		}
+		if nsInfo.resourceVersion != cachedInfo.resourceVersion {
+			return fmt.Errorf("resourceVersion differ, unable to unlock namespace info for %s", namespaceName)
+		}
+		if !reflect.DeepEqual(cachedInfo, nsInfo) {
+			cachedInfo.markForDeletion = nsInfo.markForDeletion
+			cachedInfo.resourceVersion = nsInfo.resourceVersion
+			cachedInfo.DynamicGateways = nsInfo.DynamicGateways
+			cachedInfo.StaticGateways = nsInfo.StaticGateways
+			cachedInfo.Policies = nsInfo.Policies
+			cachedInfo.resourceVersion++
+		}
+		return nil
+	})
+	// m.namespaceInfoSyncCache.UnlockKey(namespaceName)
 }
 
 func (m *externalPolicyManager) newNamespaceInfoInCache(namespaceName string) *namespaceInfo {
-	m.namespaceInfoSyncCache.LockKey(namespaceName)
-	nsInfo, _ := m.namespaceInfoSyncCache.LoadOrStore(namespaceName, newNamespaceInfo())
-	return nsInfo
+	m.namespaceInfoSyncCache.DoWithLock(namespaceName, func(_ string) error {
+		_, _ = m.namespaceInfoSyncCache.LoadOrStore(namespaceName, newNamespaceInfo())
+		return nil
+	})
+	newNsInfo, _ := m.getNamespaceInfoFromCache(namespaceName)
+	return newNsInfo
 }
 
 func (m *externalPolicyManager) listNamespaceInfoCache() []string {

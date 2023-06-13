@@ -46,7 +46,6 @@ func (m *externalPolicyManager) syncNamespace(namespace *v1.Namespace, namespace
 		return nil
 	}
 
-	defer m.unlockNamespaceInfoCache(namespace.Name)
 	if found && cacheInfo.markForDeletion {
 		// namespace exists and has been marked for deletion, this means there should be an event to complete deleting the namespace.
 		// wait for the namespace to be deleted before recreating it in the cache.
@@ -56,13 +55,19 @@ func (m *externalPolicyManager) syncNamespace(namespace *v1.Namespace, namespace
 	if !found {
 		// ADD use case
 		klog.V(2).InfoS("Adding namespace %s", namespace.Name)
-		_ = m.newNamespaceInfoInCache(namespace.Name)
+		cacheInfo = m.newNamespaceInfoInCache(namespace.Name)
 	} else {
 		// UPDATE use case
 		klog.V(2).InfoS("Updating namespace %s", namespace.Name)
+		cacheInfo.Policies = matches
 	}
 	// notify of changes to the policy controller
-	return m.notifyRouteController(matches, routeQueue)
+	err = m.notifyRouteController(matches, routeQueue)
+	if err != nil {
+		return err
+	}
+	// persist cacheInfo
+	return m.unlockNamespaceInfoCache(namespace.Name, cacheInfo)
 }
 
 func (m *externalPolicyManager) notifyRouteController(policies sets.Set[string], routeQueue workqueue.RateLimitingInterface) error {
@@ -97,7 +102,6 @@ func (m *externalPolicyManager) processDeleteNamespace(namespaceName string) ([]
 		// namespace is not a recipient for policies
 		return nil, nil
 	}
-	defer m.unlockNamespaceInfoCache(namespaceName)
 	podsInNs, err := m.podLister.Pods(namespaceName).List(labels.Everything())
 	if err != nil {
 		return nil, err
@@ -106,7 +110,7 @@ func (m *externalPolicyManager) processDeleteNamespace(namespaceName string) ([]
 		klog.Infof("Attempting to delete namespace %s with resources still attached to it. Retrying...", namespaceName)
 		return nil, fmt.Errorf("unable to delete namespace %s with resources still attached to it", namespaceName)
 	}
-	m.deleteNamespaceInfoInCache(namespaceName)
+	m.deleteNamespaceInfoInCache(namespaceName, nsInfo)
 	// capture all policies targeting the namespace for notification of the change
 	policies := make([]*adminpolicybasedrouteapi.AdminPolicyBasedExternalRoute, 0)
 	for policyName := range nsInfo.Policies {

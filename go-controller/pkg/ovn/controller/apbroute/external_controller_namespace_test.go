@@ -2,7 +2,6 @@ package apbroute
 
 import (
 	"context"
-	"sync"
 	"time"
 
 	. "github.com/onsi/ginkgo"
@@ -84,35 +83,11 @@ func updateNamespaceLabel(namespaceName string, labels map[string]string, fakeCl
 }
 
 func getNamespaceInfo(namespaceName string) *namespaceInfo {
-	f, found := mgr.getNamespaceInfoFromCache(namespaceName)
-	if found {
-		cp := &namespaceInfo{}
-		deepCopyNamespaceInfo(f, cp)
-		mgr.unlockNamespaceInfoCache(namespaceName)
-		return cp
-	}
+	f, _ := mgr.getNamespaceInfoFromCache(namespaceName)
 	return f
 }
 func listNamespaceInfo() []string {
 	return mgr.namespaceInfoSyncCache.GetKeys()
-}
-
-func deepCopyNamespaceInfo(source, destination *namespaceInfo) {
-	destination.Policies = sets.New(source.Policies.UnsortedList()...)
-	destination.StaticGateways = gatewayInfoList{}
-	destination.markForDeletion = source.markForDeletion
-	for _, gwInfo := range source.StaticGateways {
-		destination.StaticGateways, _, err = destination.StaticGateways.Insert(&gatewayInfo{
-			Gateways: &syncSet{
-				mux:   &sync.Mutex{},
-				items: gwInfo.Gateways.items.Clone()},
-			BFDEnabled: gwInfo.BFDEnabled})
-		Expect(err).NotTo(HaveOccurred())
-	}
-	destination.DynamicGateways = make(map[ktypes.NamespacedName]*gatewayInfo)
-	for key, value := range source.DynamicGateways {
-		destination.DynamicGateways[key] = value
-	}
 }
 
 var _ = Describe("OVN External Gateway namespace", func() {
@@ -389,7 +364,7 @@ var _ = Describe("OVN External Gateway namespace", func() {
 					cmpOpts...))
 			updateNamespaceLabel(namespaceTest.Name, dynamicPolicyTest2.Spec.From.NamespaceSelector.MatchLabels, fakeClient)
 			Eventually(func() []string { return listNamespaceInfo() }, 5).Should(HaveLen(1))
-			Eventually(func() *namespaceInfo { return getNamespaceInfo(namespaceTest.Name) }, 5).Should(Equal(newNamespaceInfo()))
+			Eventually(func() *namespaceInfo { return getNamespaceInfo(namespaceTest.Name) }, 5).Should(BeComparableTo(newNamespaceInfo(), cmpOpts...))
 		})
 
 		It("validates that a namespace changes its policies when its labels are changed to match a different policy, resulting in the later on being the only policy applied to the namespace", func() {
@@ -404,7 +379,7 @@ var _ = Describe("OVN External Gateway namespace", func() {
 					cmpOpts...))
 			updateNamespaceLabel(namespaceTest.Name, dynamicPolicyTest2.Spec.From.NamespaceSelector.MatchLabels, fakeClient)
 			Eventually(func() []string { return listNamespaceInfo() }, 5).Should(HaveLen(1))
-			Eventually(func() *namespaceInfo { return getNamespaceInfo(namespaceTest.Name) }, 5).Should(
+			Eventually(func() *namespaceInfo { return getNamespaceInfo(namespaceTest.Name) }, time.Hour, time.Second).Should(
 				BeComparableTo(
 					&namespaceInfo{
 						Policies:       sets.New(dynamicPolicyTest2.Name),

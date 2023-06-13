@@ -35,7 +35,7 @@ func (m *externalPolicyManager) syncPod(pod *v1.Pod, podLister corev1listers.Pod
 		nsInfo, found := m.getNamespaceInfoFromCache(pod.Namespace)
 		if found {
 			markedForDeletion := nsInfo.markForDeletion
-			m.unlockNamespaceInfoCache(pod.Namespace)
+			// m.unlockNamespaceInfoCache(pod.Namespace, nsInfo)
 			if markedForDeletion {
 				ns, err := namespaceLister.Get(pod.Namespace)
 				if err != nil {
@@ -132,7 +132,7 @@ func (m *externalPolicyManager) listPoliciesInNamespacesUsingPodGateway(key ktyp
 		if _, ok := cacheInfo.DynamicGateways[key]; ok {
 			policies = policies.Union(cacheInfo.Policies)
 		}
-		m.unlockNamespaceInfoCache(namespaceName)
+		// m.unlockNamespaceInfoCache(namespaceName)
 	}
 	// list all namespaces that match the policy, for those new namespaces where the pod now applies
 	p, err := m.listPoliciesUsingPodGateway(key)
