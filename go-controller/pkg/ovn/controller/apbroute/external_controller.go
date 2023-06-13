@@ -309,7 +309,7 @@ func (m *externalPolicyManager) getAndMarkRoutePolicyForDeletionInCache(policyNa
 
 func (m *externalPolicyManager) getNamespaceInfoFromCache(namespaceName string) (*namespaceInfo, bool) {
 	m.namespaceInfoSyncCache.LockKey(namespaceName)
-	klog.Infof("Getting lock %s", namespaceName)
+	// klog.Infof("Getting lock %s", namespaceName)
 	nsInfo, ok := m.namespaceInfoSyncCache.Load(namespaceName)
 	if !ok {
 		m.namespaceInfoSyncCache.UnlockKey(namespaceName)
@@ -345,7 +345,7 @@ func (m *externalPolicyManager) deleteNamespaceInfoInCache(namespaceName string)
 }
 
 func (m *externalPolicyManager) unlockNamespaceInfoCache(namespaceName string) {
-	klog.Infof("Unlocking %s", namespaceName)
+	// klog.Infof("Unlocking %s", namespaceName)
 	m.namespaceInfoSyncCache.UnlockKey(namespaceName)
 }
 

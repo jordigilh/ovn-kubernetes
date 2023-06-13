@@ -235,7 +235,7 @@ func (c *ExternalGatewayNodeController) processNextPolicyWorkItem(wg *sync.WaitG
 
 	item := obj.(*adminpolicybasedrouteapi.AdminPolicyBasedExternalRoute)
 	klog.Infof("Processing policy %s", item.Name)
-	err := c.mgr.syncRoutePolicy(item, c.routeLister, c.routeQueue)
+	err := c.mgr.syncRoutePolicy(item, c.routeQueue, c.namespaceQueue)
 	if err != nil {
 		if c.routeQueue.NumRequeues(item) < maxRetries {
 			klog.V(2).InfoS("Error found while processing policy: %v", err.Error())

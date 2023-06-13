@@ -252,7 +252,7 @@ func (c *ExternalGatewayMasterController) processNextPolicyWorkItem(wg *sync.Wai
 		klog.Errorf("Invalid type %T", obj)
 	}
 	klog.Infof("Processing policy %s", item.Name)
-	err := c.mgr.syncRoutePolicy(item, c.routeLister, c.routeQueue)
+	err := c.mgr.syncRoutePolicy(item, c.routeQueue, c.namespaceQueue)
 	// capture the error from processing the sync in the statuses message field
 	err = c.updateStatusAPBExternalRoute(item, err)
 	if err != nil {

@@ -60,27 +60,33 @@ func (m *externalPolicyManager) syncNamespace(namespace *v1.Namespace, namespace
 	} else {
 		// UPDATE use case
 		klog.V(2).InfoS("Updating namespace %s", namespace.Name)
-		// policies might differ, need to reconcile them
 	}
 	// notify of changes to the policy controller
-	m.notifyRouteController(matches, routeQueue)
-	return nil
+	return m.notifyRouteController(matches, routeQueue)
 }
 
-func (m *externalPolicyManager) notifyRouteController(policies sets.Set[string], routeQueue workqueue.RateLimitingInterface) {
+func (m *externalPolicyManager) notifyRouteController(policies sets.Set[string], routeQueue workqueue.RateLimitingInterface) error {
+	var err error
 	for policyName := range policies {
 		policy, found, markedForDeletion := m.getRoutePolicyFromCache(policyName)
-		if !found {
-			klog.Infof("unable to find matching policy %s in cache", policyName)
-			continue
-		}
 		if markedForDeletion {
 			klog.Infof("Skipping route policy %s as it has been marked for deletion", policyName)
 			continue
 		}
-		klog.V(2).InfoS("Queueing policy %s", policyName)
+		if !found {
+			_, err = m.routeLister.Get(policyName)
+			// Check if the route policy exists in the API server, if it exists it means the policy has not yet been processed and we should not ignore it
+			// On the other hand, consider the policy as deleted and ignore it
+			if apierrors.IsNotFound(err) {
+				klog.Infof("Route policy %s not found in the cache or in the API server", policyName)
+				continue
+			}
+			return fmt.Errorf("route policy %s not found in cache but exists in API server", policyName)
+		}
+		klog.V(2).InfoS("Queueing route policy %s", policyName)
 		routeQueue.Add(policy)
 	}
+	return nil
 }
 
 // processDeleteNamespace processes a delete namespace event by ensuring that no pod is still running in that namespace before deleting the namespace info cache. It also

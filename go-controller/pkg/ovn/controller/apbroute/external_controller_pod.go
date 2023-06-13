@@ -48,8 +48,7 @@ func (m *externalPolicyManager) syncPod(pod *v1.Pod, podLister corev1listers.Pod
 		// ADD or UPDATE case
 		klog.Infof("Adding or Updating pod gateway %s/%s", pod.Namespace, pod.Name)
 	}
-	m.notifyRouteController(policies, routeQueue)
-	return nil
+	return m.notifyRouteController(policies, routeQueue)
 }
 
 func getExGwPodIPs(gatewayPod *v1.Pod, networkName string) (sets.Set[string], error) {

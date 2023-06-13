@@ -16,20 +16,19 @@ import (
 	"k8s.io/klog/v2"
 
 	adminpolicybasedrouteapi "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/crd/adminpolicybasedroute/v1"
-	adminpolicybasedroutelisters "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/crd/adminpolicybasedroute/v1/apis/listers/adminpolicybasedroute/v1"
 	"github.com/ovn-org/ovn-kubernetes/go-controller/pkg/util"
 )
 
 func (m *externalPolicyManager) syncRoutePolicy(routePolicy *adminpolicybasedrouteapi.AdminPolicyBasedExternalRoute,
-	routeLister adminpolicybasedroutelisters.AdminPolicyBasedExternalRouteLister, routeQueue workqueue.RateLimitingInterface) error {
-	_, err := routeLister.Get(routePolicy.Name)
+	routeQueue, namespaceQueue workqueue.RateLimitingInterface) error {
+	_, err := m.routeLister.Get(routePolicy.Name)
 	if err != nil && !apierrors.IsNotFound(err) {
 		return err
 	}
 	if apierrors.IsNotFound(err) || !routePolicy.DeletionTimestamp.IsZero() {
 		// DELETE use case
 		klog.Infof("Deleting policy %s", routePolicy.Name)
-		err = m.processDeletePolicy(routePolicy.Name, routeQueue)
+		err = m.processDeletePolicy(routePolicy.Name, namespaceQueue)
 		if err != nil {
 			return fmt.Errorf("failed to delete Admin Policy Based External Route %s:%w", routePolicy.Name, err)
 		}
@@ -187,15 +186,20 @@ func (m *externalPolicyManager) processReconciliationWithNamespace(nsName string
 	klog.Infof("Retrieving cache for ns %s: +%v dynamic", nsName, cacheInfo.DynamicGateways)
 	defer m.unlockNamespaceInfoCache(nsName)
 	policies := make([]*adminpolicybasedrouteapi.AdminPolicyBasedExternalRoute, 0)
+	var err error
 	for policy := range cacheInfo.Policies {
 		cachedPolicy, found, markedForDeletion := m.getRoutePolicyFromCache(policy)
-		if !found {
-			klog.Infof("Policy %s not found while calculating all policies in a namespace", policy)
-			continue
-		}
 		if markedForDeletion {
 			klog.Warningf("Attempting to add or update route policy %s when it has been marked for deletion. Skipping...", policy)
 			continue
+		}
+		if !found {
+			cachedPolicy, err = m.routeLister.Get(policy)
+			if apierrors.IsNotFound(err) {
+				klog.Infof("Policy %s not found in cache of API server but exists in namespace %s", policy, nsName)
+				continue
+			}
+			// return fmt.Errorf("policy %s not found while calculating all policies in a namespace", policy)
 		}
 		policies = append(policies, cachedPolicy)
 	}
@@ -306,7 +310,7 @@ func (m *externalPolicyManager) applyProcessedPolicy(policyName string, routePol
 
 // processDeletePolicy takes in a policy, marks it for deletion and proceeds to delete the gateway IPs derived from the static and dynamic hops from the namespaces impacted by the policy, as defined by the namespace
 // selector in the from field. The last step is to delete it from the cache.
-func (m *externalPolicyManager) processDeletePolicy(policyName string, routeQueue workqueue.RateLimitingInterface) error {
+func (m *externalPolicyManager) processDeletePolicy(policyName string, namespaceQueue workqueue.RateLimitingInterface) error {
 
 	// mark the policy for deletion.
 	// if it's already marked continue processing the delete action as this could be a retry attempt from a previous failed delete run.
@@ -328,14 +332,23 @@ func (m *externalPolicyManager) processDeletePolicy(policyName string, routeQueu
 			m.unlockNamespaceInfoCache(ns)
 			continue
 		}
-		var err error
 		if cacheInfo.Policies.Has(routePolicy.Name) {
-			err = m.removePolicyFromNamespace(ns, &routePolicy, cacheInfo)
+			err := m.removePolicyFromNamespace(ns, &routePolicy, cacheInfo)
+			if err != nil {
+				m.unlockNamespaceInfoCache(ns)
+				return err
+			}
+			namespace, err := m.namespaceLister.Get(ns)
+			if err != nil {
+				m.unlockNamespaceInfoCache(ns)
+				return err
+			}
+			namespaceQueue.Add(namespace)
 		}
 		m.unlockNamespaceInfoCache(ns)
-		if err != nil {
-			return err
-		}
+		// if err != nil {
+		// 	return err
+		// }
 	}
 	klog.Infof("Proceeding to delete route %s from cache", routePolicy.Name)
 	err := m.deleteRoutePolicyFromCache(routePolicy.Name)
@@ -545,8 +558,10 @@ func (m *externalPolicyManager) applyProcessedPolicyToNamespace(namespaceName, p
 		cacheInfo.DynamicGateways[pod] = newGatewayInfo(info.Gateways.items, info.BFDEnabled)
 
 	}
-	klog.Infof("Adding policy %s to namespace %s", policyName, namespaceName)
-	cacheInfo.Policies = cacheInfo.Policies.Insert(policyName)
+	if _, found, markedForDeletion := m.getRoutePolicyFromCache(policyName); found && !markedForDeletion {
+		klog.Infof("Adding policy %s to namespace %s", policyName, namespaceName)
+		cacheInfo.Policies = cacheInfo.Policies.Insert(policyName)
+	}
 	return nil
 }
 
@@ -558,17 +573,17 @@ func (m *externalPolicyManager) applyProcessedPolicyToNamespace(namespaceName, p
 func (m *externalPolicyManager) processUpdatePolicy(currentPolicy, updatedPolicy *adminpolicybasedrouteapi.AdminPolicyBasedExternalRoute) error {
 	klog.Infof("Processing update for Admin Policy Based External Route '%s'", currentPolicy.Name)
 
-	// To update the policies, first we'll process the diff between old and new and remove the discrepancies that are not found in the new object.
-	// Afterwards, we'll process the diff between the new and the old and apply the new policies not found in the old policy, ensuring that we are not reduplicating the gatewayInfo.
-	err := m.removeDiscrepanciesInRoutePolicy(currentPolicy, updatedPolicy)
-	if err != nil {
-		return err
-	}
-	// At this point we have removed all the aspects of the current policy that no longer applies. Next step is to apply the parts of the new policy that are not in the current one.
-	err = m.applyUpdatesInRoutePolicy(currentPolicy, updatedPolicy)
-	if err != nil {
-		return err
-	}
+	// // To update the policies, first we'll process the diff between old and new and remove the discrepancies that are not found in the new object.
+	// // Afterwards, we'll process the diff between the new and the old and apply the new policies not found in the old policy, ensuring that we are not reduplicating the gatewayInfo.
+	// err := m.removeDiscrepanciesInRoutePolicy(currentPolicy, updatedPolicy)
+	// if err != nil {
+	// 	return err
+	// }
+	// // At this point we have removed all the aspects of the current policy that no longer applies. Next step is to apply the parts of the new policy that are not in the current one.
+	// err = m.applyUpdatesInRoutePolicy(currentPolicy, updatedPolicy)
+	// if err != nil {
+	// 	return err
+	// }
 
 	// update the cache to ensure it reflects the latest copy
 	return m.storeRoutePolicyInCache(updatedPolicy)
@@ -795,18 +810,18 @@ func (m *externalPolicyManager) getPoliciesForNamespace(namespaceName string, ca
 	}
 
 	for _, policy := range policies {
-		p, found, markedForDeletion := m.getRoutePolicyFromCache(policy.Name)
-		if !found || markedForDeletion {
+		_, _, markedForDeletion := m.getRoutePolicyFromCache(policy.Name)
+		if markedForDeletion {
 			continue
 		}
-		targetNamespaces, err := m.listNamespacesBySelector(&p.Spec.From.NamespaceSelector)
+		targetNamespaces, err := m.listNamespacesBySelector(&policy.Spec.From.NamespaceSelector)
 		if err != nil {
 			return nil, err
 		}
 		for _, ns := range targetNamespaces {
 			if namespaceName == ns.Name {
-				klog.Infof("Found matching policy %s for namespace %s", p.Name, namespaceName)
-				matches = matches.Insert(p.Name)
+				klog.Infof("Found matching policy %s for namespace %s", policy.Name, namespaceName)
+				matches = matches.Insert(policy.Name)
 			}
 		}
 	}

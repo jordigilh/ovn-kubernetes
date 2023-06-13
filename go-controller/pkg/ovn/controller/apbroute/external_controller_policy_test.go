@@ -233,7 +233,7 @@ var _ = Describe("OVN External Gateway policy", func() {
 						newGatewayInfo(sets.New(staticHopGWIP), false),
 					},
 					DynamicGateways: map[types.NamespacedName]*gatewayInfo{
-						{Namespace: "default", Name: pod1.Name}: newGatewayInfo(sets.New(pod1.Status.PodIPs[0].IP), false),
+						{Namespace: pod1.Namespace, Name: pod1.Name}: newGatewayInfo(sets.New(pod1.Status.PodIPs[0].IP), false),
 					}},
 				cmpOpts...))
 		})
