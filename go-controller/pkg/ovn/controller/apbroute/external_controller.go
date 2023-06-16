@@ -107,7 +107,7 @@ type syncSet struct {
 
 // Equal compares two gatewayInfo instances and returns true if all the gateway IPs are equal, regardless of the order, as well as the BFDEnabled field value.
 func (g *gatewayInfo) Equal(g2 *gatewayInfo) bool {
-	return g.BFDEnabled == g2.BFDEnabled && len(g.Gateways.Difference(g2.Gateways.items.Clone())) == 0
+	return g.BFDEnabled == g2.BFDEnabled && reflect.DeepEqual(g.Gateways.items, g2.Gateways.items)
 }
 
 func (g *syncSet) Has(ip string) bool {
@@ -356,7 +356,6 @@ func (m *externalPolicyManager) getAndMarkForDeleteNamespaceInfoFromCache(namesp
 		found bool
 	)
 	m.namespaceInfoSyncCache.DoWithLock(namespaceName, func(_ string) error {
-		// klog.Infof("Getting lock %s", namespaceName)
 		nsInfo, ok := m.namespaceInfoSyncCache.Load(namespaceName)
 		if ok {
 			nsInfo.markForDeletion = true
@@ -389,9 +388,8 @@ func (m *externalPolicyManager) deleteNamespaceInfoInCache(namespaceName string,
 
 }
 
-func (m *externalPolicyManager) unlockNamespaceInfoCache(namespaceName string, nsInfo *namespaceInfo) error {
+func (m *externalPolicyManager) updateNamespaceInfoCache(namespaceName string, nsInfo *namespaceInfo) error {
 	return m.namespaceInfoSyncCache.DoWithLock(namespaceName, func(_ string) error {
-		klog.Infof("Unlocking namespace %s", namespaceName)
 		cachedInfo, ok := m.namespaceInfoSyncCache.Load(namespaceName)
 		if !ok {
 			klog.Warningf("Failed to retrieve namespace %s for deletion", namespaceName)
@@ -410,12 +408,14 @@ func (m *externalPolicyManager) unlockNamespaceInfoCache(namespaceName string, n
 		}
 		return nil
 	})
-	// m.namespaceInfoSyncCache.UnlockKey(namespaceName)
 }
 
 func (m *externalPolicyManager) newNamespaceInfoInCache(namespaceName string) *namespaceInfo {
 	m.namespaceInfoSyncCache.DoWithLock(namespaceName, func(_ string) error {
-		_, _ = m.namespaceInfoSyncCache.LoadOrStore(namespaceName, newNamespaceInfo())
+		_, loaded := m.namespaceInfoSyncCache.LoadOrStore(namespaceName, newNamespaceInfo())
+		if loaded {
+			klog.V(2).InfoS("Namespace %s was already present in cache while creating it", namespaceName)
+		}
 		return nil
 	})
 	newNsInfo, _ := m.getNamespaceInfoFromCache(namespaceName)

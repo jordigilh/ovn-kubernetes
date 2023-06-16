@@ -9,7 +9,6 @@ import (
 	adminpolicybasedrouteapi "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/crd/adminpolicybasedroute/v1"
 	v1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/labels"
 	ktypes "k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
 	corev1listers "k8s.io/client-go/listers/core/v1"
@@ -29,25 +28,6 @@ func (m *externalPolicyManager) syncPod(pod *v1.Pod, podLister corev1listers.Pod
 		return pErr
 	}
 	klog.Infof("Processing pod %s/%s with matching policies %+v", pod.Namespace, pod.Name, policies.UnsortedList())
-	if apierrors.IsNotFound(err) || !pod.DeletionTimestamp.IsZero() {
-		// DELETE case
-		klog.Infof("Deleting pod %s/%s", pod.Namespace, pod.Name)
-		nsInfo, found := m.getNamespaceInfoFromCache(pod.Namespace)
-		if found {
-			markedForDeletion := nsInfo.markForDeletion
-			// m.unlockNamespaceInfoCache(pod.Namespace, nsInfo)
-			if markedForDeletion {
-				ns, err := namespaceLister.Get(pod.Namespace)
-				if err != nil {
-					return err
-				}
-				namespaceQueue.Add(ns)
-			}
-		}
-	} else {
-		// ADD or UPDATE case
-		klog.Infof("Adding or Updating pod gateway %s/%s", pod.Namespace, pod.Name)
-	}
 	return m.notifyRouteController(policies, routeQueue)
 }
 
@@ -99,21 +79,23 @@ func getMultusIPsFromNetworkName(pod *v1.Pod, networkName string) (sets.Set[stri
 func (m *externalPolicyManager) listPoliciesUsingPodGateway(key ktypes.NamespacedName) ([]*adminpolicybasedrouteapi.AdminPolicyBasedExternalRoute, error) {
 
 	ret := make([]*adminpolicybasedrouteapi.AdminPolicyBasedExternalRoute, 0)
-	policies, err := m.routeLister.List(labels.Everything())
-	if err != nil {
-		return nil, err
-	}
-	for _, p := range policies {
-		klog.Infof("Checking for policy %s to have pod %s", p.Name, key)
-		pp, err := m.processExternalRoutePolicy(p)
+	policyNames := m.routePolicySyncCache.GetKeys()
+	for _, pName := range policyNames {
+		policy, found, markedForDeletion := m.getRoutePolicyFromCache(pName)
+		if !found {
+			klog.Infof("Policy %s not found", pName)
+			continue
+		}
+		if markedForDeletion {
+			klog.Infof("Policy %s has been marked for deletion, skipping", pName)
+		}
+		pp, err := m.processExternalRoutePolicy(policy)
 		if err != nil {
 			return nil, err
 		}
 		if _, found := pp.dynamicGateways[key]; found {
-			klog.Infof("Policy %s has pod %s", p.Name, key)
-			ret = append(ret, p)
+			ret = append(ret, policy)
 		}
-
 	}
 	return ret, nil
 }

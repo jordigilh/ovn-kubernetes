@@ -22,16 +22,9 @@ func (m *externalPolicyManager) syncNamespace(namespace *v1.Namespace, namespace
 	if apierrors.IsNotFound(err) || !namespace.DeletionTimestamp.IsZero() {
 		// DELETE use case
 		klog.Infof("Deleting namespace reference %s", namespace.Name)
-		policies, err := m.processDeleteNamespace(namespace.Name)
+		err := m.processDeleteNamespace(namespace.Name)
 		if err != nil {
 			return err
-		}
-		// notify of changes to the policy controller
-		if len(policies) > 0 {
-			for _, policy := range policies {
-				klog.Infof("Queueing policy %s", policy.Name)
-				routeQueue.Add(policy)
-			}
 		}
 		return nil
 	}
@@ -52,41 +45,19 @@ func (m *externalPolicyManager) syncNamespace(namespace *v1.Namespace, namespace
 		return fmt.Errorf("cannot add namespace %s because it is currently being deleted", namespace.Name)
 	}
 
-	if !found {
-		// ADD use case
-		klog.V(2).InfoS("Adding namespace %s", namespace.Name)
-		cacheInfo = m.newNamespaceInfoInCache(namespace.Name)
-	} else {
-		// UPDATE use case
-		klog.V(2).InfoS("Updating namespace %s", namespace.Name)
-		cacheInfo.Policies = matches
-	}
 	// notify of changes to the policy controller
-	err = m.notifyRouteController(matches, routeQueue)
-	if err != nil {
-		return err
-	}
-	// persist cacheInfo
-	return m.unlockNamespaceInfoCache(namespace.Name, cacheInfo)
+	return m.notifyRouteController(matches, routeQueue)
 }
 
 func (m *externalPolicyManager) notifyRouteController(policies sets.Set[string], routeQueue workqueue.RateLimitingInterface) error {
-	var err error
 	for policyName := range policies {
 		policy, found, markedForDeletion := m.getRoutePolicyFromCache(policyName)
+		if !found {
+			return fmt.Errorf("route policy %s not found, skipping it", policyName)
+		}
 		if markedForDeletion {
 			klog.Infof("Skipping route policy %s as it has been marked for deletion", policyName)
 			continue
-		}
-		if !found {
-			_, err = m.routeLister.Get(policyName)
-			// Check if the route policy exists in the API server, if it exists it means the policy has not yet been processed and we should not ignore it
-			// On the other hand, consider the policy as deleted and ignore it
-			if apierrors.IsNotFound(err) {
-				klog.Infof("Route policy %s not found in the cache or in the API server", policyName)
-				continue
-			}
-			return fmt.Errorf("route policy %s not found in cache but exists in API server", policyName)
 		}
 		klog.V(2).InfoS("Queueing route policy %s", policyName)
 		routeQueue.Add(policy)
@@ -96,36 +67,22 @@ func (m *externalPolicyManager) notifyRouteController(policies sets.Set[string],
 
 // processDeleteNamespace processes a delete namespace event by ensuring that no pod is still running in that namespace before deleting the namespace info cache. It also
 // marks the namespace for deletion so that if a new pod event appears targeting the namespace, the operation will be rejected.
-func (m *externalPolicyManager) processDeleteNamespace(namespaceName string) ([]*adminpolicybasedrouteapi.AdminPolicyBasedExternalRoute, error) {
+func (m *externalPolicyManager) processDeleteNamespace(namespaceName string) error {
 	nsInfo, found := m.getAndMarkForDeleteNamespaceInfoFromCache(namespaceName)
 	if !found {
 		// namespace is not a recipient for policies
-		return nil, nil
+		return nil
 	}
 	podsInNs, err := m.podLister.Pods(namespaceName).List(labels.Everything())
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if len(podsInNs) != 0 {
 		klog.Infof("Attempting to delete namespace %s with resources still attached to it. Retrying...", namespaceName)
-		return nil, fmt.Errorf("unable to delete namespace %s with resources still attached to it", namespaceName)
+		return fmt.Errorf("unable to delete namespace %s with resources still attached to it", namespaceName)
 	}
 	m.deleteNamespaceInfoInCache(namespaceName, nsInfo)
-	// capture all policies targeting the namespace for notification of the change
-	policies := make([]*adminpolicybasedrouteapi.AdminPolicyBasedExternalRoute, 0)
-	for policyName := range nsInfo.Policies {
-		policy, found, markedForDeletion := m.getRoutePolicyFromCache(policyName)
-		if !found {
-			klog.Infof("failed to find external route policy %s in cache", policyName)
-			continue
-		}
-		if markedForDeletion {
-			klog.Infof("Skipping route policy %s as it has been marked for deletion", policyName)
-			continue
-		}
-		policies = append(policies, policy)
-	}
-	return policies, nil
+	return nil
 }
 
 func (m *externalPolicyManager) applyPolicyToNamespace(namespaceName string, policy *adminpolicybasedrouteapi.AdminPolicyBasedExternalRoute, cacheInfo *namespaceInfo) error {
@@ -147,7 +104,7 @@ func (m *externalPolicyManager) removePolicyFromNamespace(targetNamespace string
 	if err != nil {
 		return err
 	}
-	err = m.deletePolicyInNamespace(targetNamespace, policy.Name, processedPolicy, cacheInfo)
+	err = m.deletePolicyInNamespace(targetNamespace, policy, processedPolicy, cacheInfo)
 	if err != nil {
 		return err
 	}
