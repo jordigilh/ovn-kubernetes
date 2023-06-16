@@ -40,7 +40,7 @@ func (m *externalPolicyManager) syncRoutePolicy(routePolicy *adminpolicybasedrou
 		klog.Infof("Adding policy %s", routePolicy.Name)
 		err := m.processAddPolicy(routePolicy)
 		if err != nil {
-			return fmt.Errorf("failed to create Admin Policy Based External Route %s:%w", routePolicy.Name, err)
+			return fmt.Errorf("failed to add Admin Policy Based External Route %s:%w", routePolicy.Name, err)
 		}
 		return nil
 	}
@@ -85,15 +85,11 @@ func (m *externalPolicyManager) syncRoutePolicy(routePolicy *adminpolicybasedrou
 func (m *externalPolicyManager) processAddPolicy(routePolicy *adminpolicybasedrouteapi.AdminPolicyBasedExternalRoute) error {
 
 	// it's a new policy
-	// processedPolicies, err := m.processExternalRoutePolicy(routePolicy)
-	// if err != nil {
-	// 	return err
-	// }
-	// err = m.applyProcessedPolicy(routePolicy.Name, processedPolicies)
-	// if err != nil {
-	// 	return err
-	// }
 	err := m.storeRoutePolicyInCache(routePolicy)
+	if err != nil {
+		return err
+	}
+	err = m.reconcilePolicyWithNamespacesAndPods(routePolicy)
 	if err != nil {
 		return err
 	}
