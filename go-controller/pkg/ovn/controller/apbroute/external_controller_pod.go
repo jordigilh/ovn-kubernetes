@@ -6,7 +6,6 @@ import (
 	"net"
 
 	nettypes "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/apis/k8s.cni.cncf.io/v1"
-	adminpolicybasedrouteapi "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/crd/adminpolicybasedroute/v1"
 	v1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	ktypes "k8s.io/apimachinery/pkg/types"
@@ -17,17 +16,17 @@ import (
 	utilnet "k8s.io/utils/net"
 )
 
-func (m *externalPolicyManager) syncPod(pod *v1.Pod, podLister corev1listers.PodLister, namespaceLister corev1listers.NamespaceLister, routeQueue, namespaceQueue workqueue.RateLimitingInterface) error {
+func (m *externalPolicyManager) syncPod(podName ktypes.NamespacedName, podLister corev1listers.PodLister, namespaceLister corev1listers.NamespaceLister, routeQueue, namespaceQueue workqueue.RateLimitingInterface) error {
 
-	_, err := podLister.Pods(pod.Namespace).Get(pod.Name)
+	_, err := podLister.Pods(podName.Namespace).Get(podName.Name)
 	if err != nil && !apierrors.IsNotFound(err) {
 		return err
 	}
-	policies, pErr := m.listPoliciesInNamespacesUsingPodGateway(ktypes.NamespacedName{Namespace: pod.Namespace, Name: pod.Name})
+	policies, pErr := m.listPoliciesInNamespacesUsingPodGateway(podName)
 	if pErr != nil {
 		return pErr
 	}
-	klog.Infof("Processing pod %s/%s with matching policies %+v", pod.Namespace, pod.Name, policies.UnsortedList())
+	klog.Infof("Processing pod %s with matching policies %+v", podName, policies)
 	return m.notifyRouteController(policies, routeQueue)
 }
 
@@ -76,9 +75,9 @@ func getMultusIPsFromNetworkName(pod *v1.Pod, networkName string) (sets.Set[stri
 	return nil, fmt.Errorf("unable to find multus network %s in pod %s/%s", networkName, pod.Namespace, pod.Name)
 }
 
-func (m *externalPolicyManager) listPoliciesUsingPodGateway(key ktypes.NamespacedName) ([]*adminpolicybasedrouteapi.AdminPolicyBasedExternalRoute, error) {
+func (m *externalPolicyManager) listPoliciesUsingPodGateway(key ktypes.NamespacedName) ([]string, error) {
 
-	ret := make([]*adminpolicybasedrouteapi.AdminPolicyBasedExternalRoute, 0)
+	ret := make([]string, 0)
 	policyNames := m.routePolicySyncCache.GetKeys()
 	for _, pName := range policyNames {
 		policy, found, markedForDeletion := m.getRoutePolicyFromCache(pName)
@@ -94,13 +93,13 @@ func (m *externalPolicyManager) listPoliciesUsingPodGateway(key ktypes.Namespace
 			return nil, err
 		}
 		if _, found := pp.dynamicGateways[key]; found {
-			ret = append(ret, policy)
+			ret = append(ret, policy.Name)
 		}
 	}
 	return ret, nil
 }
 
-func (m *externalPolicyManager) listPoliciesInNamespacesUsingPodGateway(key ktypes.NamespacedName) (sets.Set[string], error) {
+func (m *externalPolicyManager) listPoliciesInNamespacesUsingPodGateway(key ktypes.NamespacedName) ([]string, error) {
 	policies := sets.New[string]()
 	// iterate through all current namespaces that contain the pod. This is needed in case the pod is deleted from an existing namespace, in which case
 	// if we iterated applying the namespace selector in the policies, we would miss the fact that a pod was part of a namespace that is no longer
@@ -111,10 +110,7 @@ func (m *externalPolicyManager) listPoliciesInNamespacesUsingPodGateway(key ktyp
 		if !found {
 			continue
 		}
-		if _, ok := cacheInfo.DynamicGateways[key]; ok {
-			policies = policies.Union(cacheInfo.Policies)
-		}
-		// m.unlockNamespaceInfoCache(namespaceName)
+		policies = policies.Union(cacheInfo.Policies)
 	}
 	// list all namespaces that match the policy, for those new namespaces where the pod now applies
 	p, err := m.listPoliciesUsingPodGateway(key)
@@ -122,7 +118,7 @@ func (m *externalPolicyManager) listPoliciesInNamespacesUsingPodGateway(key ktyp
 		return nil, err
 	}
 	for _, policy := range p {
-		policies.Insert(policy.Name)
+		policies.Insert(policy)
 	}
-	return policies, nil
+	return policies.UnsortedList(), nil
 }

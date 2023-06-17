@@ -292,7 +292,7 @@ var _ = Describe("OVN External Gateway policy", func() {
 				false,
 			)
 		)
-		FIt("validates that the IPs of the policy are no longer reflected on the targeted namespaces when the policy is deleted an no other policy overlaps", func() {
+		It("validates that the IPs of the policy are no longer reflected on the targeted namespaces when the policy is deleted an no other policy overlaps", func() {
 			initController([]runtime.Object{namespaceDefault, namespaceTest, pod1}, []runtime.Object{staticPolicy, dynamicPolicy})
 
 			Eventually(func() []string { return listRoutePolicyInCache() }, 5).Should(HaveLen(2))
@@ -421,6 +421,12 @@ var _ = Describe("OVN External Gateway policy", func() {
 			lastUpdate := p.Status.LastTransitionTime
 			_, err = fakeRouteClient.K8sV1().AdminPolicyBasedExternalRoutes().Update(context.Background(), p, v1.UpdateOptions{})
 			Expect(err).NotTo(HaveOccurred())
+			Eventually(func() adminpolicybasedrouteapi.AdminPolicyBasedExternalRouteSpec {
+				reloadPolicy, err := externalController.routeLister.Get(staticPolicy.Name)
+				Expect(err).NotTo(HaveOccurred())
+				return reloadPolicy.Spec
+			}, 5).Should(BeComparableTo(p.Spec))
+
 			Eventually(func() v1.Time {
 				p, err = fakeRouteClient.K8sV1().AdminPolicyBasedExternalRoutes().Get(context.TODO(), staticPolicy.Name, v1.GetOptions{})
 				Expect(err).NotTo(HaveOccurred())
@@ -471,6 +477,11 @@ var _ = Describe("OVN External Gateway policy", func() {
 			lastUpdate := p.Status.LastTransitionTime
 			_, err = fakeRouteClient.K8sV1().AdminPolicyBasedExternalRoutes().Update(context.Background(), p, v1.UpdateOptions{})
 			Expect(err).NotTo(HaveOccurred())
+			Eventually(func() adminpolicybasedrouteapi.AdminPolicyBasedExternalRouteSpec {
+				reloadPolicy, err := externalController.routeLister.Get(singlePodDynamicPolicy.Name)
+				Expect(err).NotTo(HaveOccurred())
+				return reloadPolicy.Spec
+			}, 5).Should(BeComparableTo(p.Spec))
 			Eventually(func() v1.Time {
 				p, err = fakeRouteClient.K8sV1().AdminPolicyBasedExternalRoutes().Get(context.TODO(), singlePodDynamicPolicy.Name, v1.GetOptions{})
 				Expect(err).NotTo(HaveOccurred())

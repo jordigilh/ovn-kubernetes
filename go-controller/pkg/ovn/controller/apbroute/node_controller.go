@@ -233,16 +233,15 @@ func (c *ExternalGatewayNodeController) processNextPolicyWorkItem(wg *sync.WaitG
 	}
 	defer c.routeQueue.Done(obj)
 
-	item := obj.(*adminpolicybasedrouteapi.AdminPolicyBasedExternalRoute)
-	klog.Infof("Processing policy %s", item.Name)
-	err := c.mgr.syncRoutePolicy(item, c.routeQueue, c.namespaceQueue)
+	klog.Infof("Processing policy %s", obj)
+	_, err := c.mgr.syncRoutePolicy(obj.(string), c.routeQueue)
 	if err != nil {
-		if c.routeQueue.NumRequeues(item) < maxRetries {
+		if c.routeQueue.NumRequeues(obj) < maxRetries {
 			klog.V(2).InfoS("Error found while processing policy: %v", err.Error())
-			c.routeQueue.AddRateLimited(item)
+			c.routeQueue.AddRateLimited(obj)
 			return true
 		}
-		klog.Warningf("Dropping policy %q out of the queue: %v", item.Name, err)
+		klog.Warningf("Dropping policy %q out of the queue: %v", obj.(string), err)
 		utilruntime.HandleError(err)
 	}
 	c.routeQueue.Forget(obj)
@@ -284,7 +283,7 @@ func (c *ExternalGatewayNodeController) processNextNamespaceWorkItem(wg *sync.Wa
 	}
 	defer c.namespaceQueue.Done(obj)
 
-	err := c.mgr.syncNamespace(obj.(*v1.Namespace), c.namespaceLister, c.routeQueue)
+	err := c.mgr.syncNamespace(obj.(string), c.namespaceLister, c.routeQueue)
 	if err != nil {
 		if c.namespaceQueue.NumRequeues(obj) < maxRetries {
 			klog.V(2).InfoS("Error found while processing namespace %s:%w", obj.(*v1.Namespace), err)
@@ -339,15 +338,15 @@ func (c *ExternalGatewayNodeController) processNextPodWorkItem(wg *sync.WaitGrou
 	}
 	defer c.podQueue.Done(obj)
 
-	p := obj.(*v1.Pod)
-	err := c.mgr.syncPod(p, c.podLister, c.namespaceLister, c.routeQueue, c.namespaceQueue)
+	key := obj.(ktypes.NamespacedName)
+	err := c.mgr.syncPod(key, c.podLister, c.namespaceLister, c.routeQueue, c.namespaceQueue)
 	if err != nil {
 		if c.podQueue.NumRequeues(obj) < maxRetries {
-			klog.V(2).InfoS("Error found while processing pod %s/%s:%w", p.Namespace, p.Name, err)
+			klog.V(2).InfoS("Error found while processing pod %s/%s:%w", key.Namespace, key.Name, err)
 			c.podQueue.AddRateLimited(obj)
 			return true
 		}
-		klog.Warningf("Dropping pod %s/%s out of the queue: %s", p.Namespace, p.Name, err)
+		klog.Warningf("Dropping pod %s/%s out of the queue: %s", key.Namespace, key.Name, err)
 		utilruntime.HandleError(err)
 	}
 

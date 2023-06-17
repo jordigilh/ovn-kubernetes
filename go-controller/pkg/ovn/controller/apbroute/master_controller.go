@@ -247,21 +247,24 @@ func (c *ExternalGatewayMasterController) processNextPolicyWorkItem(wg *sync.Wai
 
 	defer c.routeQueue.Done(obj)
 
-	item, ok := obj.(*adminpolicybasedrouteapi.AdminPolicyBasedExternalRoute)
+	key, ok := obj.(string)
 	if !ok {
 		klog.Errorf("Invalid type %T", obj)
 	}
-	klog.Infof("Processing policy %s", item.Name)
-	err := c.mgr.syncRoutePolicy(item, c.routeQueue, c.namespaceQueue)
-	// capture the error from processing the sync in the statuses message field
-	err = c.updateStatusAPBExternalRoute(item, err)
+	klog.Infof("Processing policy %s", key)
+	policy, err := c.mgr.syncRoutePolicy(key, c.routeQueue)
 	if err != nil {
-		if c.routeQueue.NumRequeues(item) < maxRetries {
+		klog.Infof("Received error %s while processing %s", err, key)
+	}
+	// capture the error from processing the sync in the statuses message field
+	err = c.updateStatusAPBExternalRoute(policy, err)
+	if err != nil {
+		if c.routeQueue.NumRequeues(key) < maxRetries {
 			klog.Infof("Error found while processing policy: %w", err)
-			c.routeQueue.AddRateLimited(item)
+			c.routeQueue.AddRateLimited(key)
 			return true
 		}
-		klog.Warningf("Dropping policy %q out of the queue: %w", item.Name, err)
+		klog.Warningf("Dropping policy %q out of the queue: %w", policy.Name, err)
 		utilruntime.HandleError(err)
 	}
 	c.routeQueue.Forget(obj)
@@ -269,41 +272,61 @@ func (c *ExternalGatewayMasterController) processNextPolicyWorkItem(wg *sync.Wai
 }
 
 func (c *ExternalGatewayMasterController) onPolicyAdd(obj interface{}) {
-	c.routeQueue.Add(obj)
+	policy := obj.(*adminpolicybasedrouteapi.AdminPolicyBasedExternalRoute)
+	c.routeQueue.Add(policy.Name)
 }
 
 func (c *ExternalGatewayMasterController) onPolicyUpdate(oldObj, newObj interface{}) {
 	oldRoutePolicy := oldObj.(*adminpolicybasedrouteapi.AdminPolicyBasedExternalRoute)
 	newRoutePolicy := newObj.(*adminpolicybasedrouteapi.AdminPolicyBasedExternalRoute)
 
+	informerPolicy, err := c.routeLister.Get(newRoutePolicy.Name)
+	if err != nil {
+		klog.Errorf("failed to retrieve policy %s from informer", newRoutePolicy.Name)
+	}
+	if newRoutePolicy.Generation > informerPolicy.Generation {
+		klog.Errorf("informer policy %s has older resource version (%d vs %d) than the one from the queue", informerPolicy.Name, informerPolicy.ResourceVersion, newRoutePolicy.ResourceVersion)
+	}
+
 	if oldRoutePolicy.Generation == newRoutePolicy.Generation ||
 		!newRoutePolicy.GetDeletionTimestamp().IsZero() {
 		return
 	}
 
-	c.routeQueue.Add(newObj)
+	c.routeQueue.Add(oldRoutePolicy.Name)
 }
 
 func (c *ExternalGatewayMasterController) onPolicyDelete(obj interface{}) {
-	c.routeQueue.Add(obj)
+	policy := obj.(*adminpolicybasedrouteapi.AdminPolicyBasedExternalRoute)
+	c.routeQueue.Add(policy.Name)
 }
 
 func (c *ExternalGatewayMasterController) onNamespaceAdd(obj interface{}) {
-	c.namespaceQueue.Add(obj)
+	policy := obj.(*v1.Namespace)
+	c.namespaceQueue.Add(policy.Name)
 }
 
 func (c *ExternalGatewayMasterController) onNamespaceUpdate(oldObj, newObj interface{}) {
 	oldNamespace := oldObj.(*v1.Namespace)
 	newNamespace := newObj.(*v1.Namespace)
 
+	informerNamespace, err := c.namespaceLister.Get(newNamespace.Name)
+	if err != nil {
+		klog.Errorf("failed to retrieve policy %s from informer", newNamespace.Name)
+	}
+	if newNamespace.Generation > informerNamespace.Generation {
+		klog.Errorf("informer policy %s has older resource version (%d vs %d) than the one from the queue", informerNamespace.Name, informerNamespace.ResourceVersion, newNamespace.ResourceVersion)
+	}
+
 	if oldNamespace.ResourceVersion == newNamespace.ResourceVersion || !newNamespace.GetDeletionTimestamp().IsZero() {
 		return
 	}
-	c.namespaceQueue.Add(newObj)
+	c.namespaceQueue.Add(oldNamespace.Name)
 }
 
 func (c *ExternalGatewayMasterController) onNamespaceDelete(obj interface{}) {
-	c.namespaceQueue.Add(obj)
+	namespace := obj.(*v1.Namespace)
+	c.namespaceQueue.Add(namespace.Name)
 }
 
 func (c *ExternalGatewayMasterController) runNamespaceWorker(wg *sync.WaitGroup) {
@@ -324,14 +347,14 @@ func (c *ExternalGatewayMasterController) processNextNamespaceWorkItem(wg *sync.
 
 	defer c.namespaceQueue.Done(obj)
 
-	err := c.mgr.syncNamespace(obj.(*v1.Namespace), c.namespaceLister, c.routeQueue)
+	err := c.mgr.syncNamespace(obj.(string), c.namespaceLister, c.routeQueue)
 	if err != nil {
 		if c.namespaceQueue.NumRequeues(obj) < maxRetries {
-			klog.V(2).InfoS("Error found while processing namespace %s:%w", obj.(*v1.Namespace), err)
+			klog.Infof("Error found while processing namespace %s:%w", obj.(string), err)
 			c.namespaceQueue.AddRateLimited(obj)
 			return true
 		}
-		klog.Warningf("Dropping namespace %q out of the queue: %v", obj.(*v1.Namespace).Name, err)
+		klog.Warningf("Dropping namespace %q out of the queue: %v", obj.(string), err)
 		utilruntime.HandleError(err)
 	}
 	c.namespaceQueue.Forget(obj)
@@ -344,23 +367,31 @@ func (c *ExternalGatewayMasterController) onPodAdd(obj interface{}) {
 	if len(o.Status.PodIPs) == 0 && len(o.Annotations[nettypes.NetworkStatusAnnot]) == 0 {
 		return
 	}
-	c.podQueue.Add(obj)
+	c.podQueue.Add(ktypes.NamespacedName{Namespace: o.Namespace, Name: o.Name})
 }
 
 func (c *ExternalGatewayMasterController) onPodUpdate(oldObj, newObj interface{}) {
 	o := oldObj.(*v1.Pod)
 	n := newObj.(*v1.Pod)
+	informerPod, err := c.podLister.Pods(o.Namespace).Get(o.Name)
+	if err != nil {
+		klog.Errorf("failed to retrieve pod %s/%s from informer", o.Namespace, o.Name)
+	}
+	if n.ResourceVersion > informerPod.ResourceVersion {
+		klog.Errorf("informer pod %s/%s has older resource version (%d vs %d) than the one from the queue", informerPod.Namespace, informerPod.Name, informerPod.ResourceVersion, n.ResourceVersion)
+	}
 	// if labels AND assigned Pod IPs AND networkStatus annotations are the same, skip processing changes to the pod.
 	if reflect.DeepEqual(o.Labels, n.Labels) &&
 		reflect.DeepEqual(o.Status.PodIPs, n.Status.PodIPs) &&
 		reflect.DeepEqual(o.Annotations[nettypes.NetworkStatusAnnot], n.Annotations[nettypes.NetworkStatusAnnot]) {
 		return
 	}
-	c.podQueue.Add(newObj)
+	c.podQueue.Add(ktypes.NamespacedName{Namespace: o.Namespace, Name: o.Name})
 }
 
 func (c *ExternalGatewayMasterController) onPodDelete(obj interface{}) {
-	c.podQueue.Add(obj)
+	o := obj.(*v1.Pod)
+	c.podQueue.Add(ktypes.NamespacedName{Namespace: o.Namespace, Name: o.Name})
 }
 
 func (c *ExternalGatewayMasterController) runPodWorker(wg *sync.WaitGroup) {
@@ -380,11 +411,11 @@ func (c *ExternalGatewayMasterController) processNextPodWorkItem(wg *sync.WaitGr
 
 	defer c.podQueue.Done(obj)
 
-	p := obj.(*v1.Pod)
+	p := obj.(ktypes.NamespacedName)
 	err := c.mgr.syncPod(p, c.podLister, c.namespaceLister, c.routeQueue, c.namespaceQueue)
 	if err != nil {
 		if c.podQueue.NumRequeues(obj) < maxRetries {
-			klog.V(2).InfoS("Error found while processing pod %s/%s:%w", p.Namespace, p.Name, err)
+			klog.Infof("Error found while processing pod %s/%s:%w", p.Namespace, p.Name, err)
 			c.podQueue.AddRateLimited(obj)
 			return true
 		}
@@ -399,6 +430,9 @@ func (c *ExternalGatewayMasterController) processNextPodWorkItem(wg *sync.WaitGr
 // updateStatusAPBExternalRoute updates the CR with the current status of the CR instance, including errors captured while processing the CR during its lifetime
 func (c *ExternalGatewayMasterController) updateStatusAPBExternalRoute(externalRoutePolicy *adminpolicybasedrouteapi.AdminPolicyBasedExternalRoute, processedError error) error {
 
+	if externalRoutePolicy == nil {
+		return processedError
+	}
 	processedPolicy, err := c.mgr.processExternalRoutePolicy(externalRoutePolicy)
 	if err != nil {
 		return err

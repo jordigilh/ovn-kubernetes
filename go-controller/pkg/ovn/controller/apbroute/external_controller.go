@@ -250,7 +250,6 @@ func (m *externalPolicyManager) getRoutePolicyFromCache(policyName string) (*adm
 		found, markedForDeletion bool
 	)
 	_ = m.routePolicySyncCache.DoWithLock(policyName, func(policyName string) error {
-		klog.Infof("Getting route %s", policyName)
 		ri, f := m.routePolicySyncCache.Load(policyName)
 		if !f {
 			return nil
@@ -265,9 +264,10 @@ func (m *externalPolicyManager) getRoutePolicyFromCache(policyName string) (*adm
 
 func (m *externalPolicyManager) storeRoutePolicyInCache(policyInfo *adminpolicybasedrouteapi.AdminPolicyBasedExternalRoute) error {
 	return m.routePolicySyncCache.DoWithLock(policyInfo.Name, func(policyName string) error {
+		klog.Infof(">>>> Updating cache for policyName %s", policyName)
 		ri, found := m.routePolicySyncCache.Load(policyName)
 		if !found {
-			m.routePolicySyncCache.LoadOrStore(policyName, &routeInfo{policy: policyInfo})
+			m.routePolicySyncCache.Store(policyName, &routeInfo{policy: policyInfo})
 			return nil
 		}
 		if ri.markedForDeletion {
@@ -375,10 +375,10 @@ func (m *externalPolicyManager) deleteNamespaceInfoInCache(namespaceName string,
 			klog.Warningf("Failed to retrieve namespace %s for deletion", namespaceName)
 			return nil
 		}
-		if !nsInfo.markForDeletion {
-			klog.Warningf("Attempting to delete namespace %s when it has not been marked for deletion", namespaceName)
-			return nil
-		}
+		// if !nsInfo.markForDeletion {
+		// 	klog.Warningf("Attempting to delete namespace %s when it has not been marked for deletion", namespaceName)
+		// 	return nil
+		// }
 		if nsInfo.resourceVersion != cachedInfo.resourceVersion {
 			return fmt.Errorf("resourceVersion differ, unable to delete namespace info for %s", namespaceName)
 		}
@@ -390,12 +390,15 @@ func (m *externalPolicyManager) deleteNamespaceInfoInCache(namespaceName string,
 
 func (m *externalPolicyManager) updateNamespaceInfoCache(namespaceName string, nsInfo *namespaceInfo) error {
 	return m.namespaceInfoSyncCache.DoWithLock(namespaceName, func(_ string) error {
+		klog.Infof("Attempting to update cacheInfo for namespace %s: %+v", namespaceName, nsInfo)
 		cachedInfo, ok := m.namespaceInfoSyncCache.Load(namespaceName)
+		klog.Infof("Locked namespace %s", namespaceName)
 		if !ok {
-			klog.Warningf("Failed to retrieve namespace %s for deletion", namespaceName)
+			klog.Warningf("Namespace %s not found", namespaceName)
 			return nil
 		}
 		if nsInfo.resourceVersion != cachedInfo.resourceVersion {
+			klog.Infof("resourceVersion differ, unable to update namespace info for %s", namespaceName)
 			return fmt.Errorf("resourceVersion differ, unable to unlock namespace info for %s", namespaceName)
 		}
 		if !reflect.DeepEqual(cachedInfo, nsInfo) {
@@ -405,7 +408,11 @@ func (m *externalPolicyManager) updateNamespaceInfoCache(namespaceName string, n
 			cachedInfo.StaticGateways = nsInfo.StaticGateways
 			cachedInfo.Policies = nsInfo.Policies
 			cachedInfo.resourceVersion++
+			klog.Infof("Cache updated for %s: %+v", namespaceName, cachedInfo)
+			return nil
 		}
+		klog.Infof("Nothing to update, same object")
+		defer klog.Infof("Unlocked namespace %s", namespaceName)
 		return nil
 	})
 }
