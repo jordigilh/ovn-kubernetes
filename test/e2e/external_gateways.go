@@ -2240,7 +2240,7 @@ var _ = ginkgo.Describe("External Gateway", func() {
 		})
 	})
 
-	var _ = ginkgo.Context("When migrating from Annotations to Admin Policy Based External Route CRs", func() {
+	var _ = ginkgo.FContext("When migrating from Annotations to Admin Policy Based External Route CRs", func() {
 		// Validate pods can reach a network running in a container's looback address via
 		// an external gateway running on eth0 of the container without any tunnel encap.
 		// The traffic will get proxied through an annotated pod in the serving namespace.
@@ -2304,8 +2304,9 @@ var _ = ginkgo.Describe("External Gateway", func() {
 
 					createAPBExternalRouteCRWithDynamicHop(defaultPolicyName, f.Namespace.Name, servingNamespace, false, addressesv4.gatewayIPs)
 					ginkgo.By("Remove gateway annotations in pods")
-					annotatePodForGateway(gatewayPodName2, servingNamespace, "", addresses.gatewayIPs[1], false)
-					annotatePodForGateway(gatewayPodName1, servingNamespace, "", addresses.gatewayIPs[0], false)
+					removePodGatewayAnnotation(gatewayPodName1, servingNamespace)
+					removePodGatewayAnnotation(gatewayPodName2, servingNamespace)
+
 					ginkgo.By("Validate ICMP connectivity again with only CR policy to support it")
 					ginkgo.By(fmt.Sprintf("Verifying connectivity to the pod [%s] from external gateways", addresses.srcPodIP))
 					for _, gwContainer := range gwContainers {
@@ -2346,8 +2347,8 @@ var _ = ginkgo.Describe("External Gateway", func() {
 					}
 					createAPBExternalRouteCRWithDynamicHop(defaultPolicyName, f.Namespace.Name, servingNamespace, false, addressesv4.gatewayIPs)
 					ginkgo.By("removing the annotations in the pod gateways")
-					annotatePodForGateway(gatewayPodName2, servingNamespace, "", addresses.gatewayIPs[1], false)
-					annotatePodForGateway(gatewayPodName1, servingNamespace, "", addresses.gatewayIPs[0], false)
+					removePodGatewayAnnotation(gatewayPodName1, servingNamespace)
+					removePodGatewayAnnotation(gatewayPodName2, servingNamespace)
 
 					for _, container := range gwContainers {
 						reachPodFromContainer(addresses.srcPodIP, strconv.Itoa(destPortOnPod), srcPingPodName, container, protocol)
@@ -2883,6 +2884,11 @@ func reachPodFromContainer(targetAddress, targetPort, targetPodName, srcContaine
 	res, err := runCommand(dockerCmd...)
 	framework.ExpectNoError(err, "Failed to reach pod %s (%s) from external container %s", targetAddress, protocol, srcContainer)
 	framework.ExpectEqual(strings.Trim(res, "\n"), targetPodName)
+}
+
+func removePodGatewayAnnotation(podName, podNS string) {
+	annotateArgs := []string{"k8s.ovn.org/routing-namespaces-", "k8s.ovn.org/routing-network-", "k8s.ovn.org/bfd-enabled-"}
+	annotatePodForGatewayWithAnnotations(podName, podNS, annotateArgs)
 }
 
 func annotatePodForGateway(podName, podNS, namespace, networkIPs string, bfd bool) {
